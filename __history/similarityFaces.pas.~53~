@@ -1,0 +1,313 @@
+unit similarityFaces;
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
+  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, LuxandFaceSDK, Vcl.StdCtrls, System.Math,  Vcl.Imaging.JPEG,  Vcl.Imaging.PNGImage, System.Types, System.Math.Vectors,
+  GR32, GR32_Layers, GR32_Transforms, GR32_Image, GR32_Filters, tesseractocr;
+
+type
+  TForm1 = class(TForm)
+    Button1: TButton;
+    Button2: TButton;
+    Button3: TButton;
+    procedure Button1Click(Sender: TObject);
+    procedure Button2Click(Sender: TObject);
+    procedure Button3Click(Sender: TObject);
+  private
+    { Déclarations privées }
+  public
+    { Déclarations publiques }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.dfm}
+
+//--- Conversion de l'image en TBitmap -----------------------------------------
+function LoadAndConvertImage(const FileName: string): TBitmap;
+var
+ Graphic : TGraphic;
+ Bitmap  : TBitmap;
+begin
+  Result := TBitmap.Create;
+  try
+
+    IF LowerCase(ExtractFileExt(FileName)) = '.jpg' THEN
+      Graphic := TJPEGImage.Create
+    ELSE IF LowerCase(ExtractFileExt(FileName)) = '.png' THEN
+      Graphic := TPNGImage.Create
+    ELSE
+      raise Exception.Create('Format d''image non pris en charge');
+
+    try
+      Graphic.LoadFromFile(FileName);
+      Result.Assign(Graphic);
+    finally
+      Graphic.Free;
+    end;
+
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+//--- rotation d'une images avec la bibliotheque Graphic32 ---------------------
+function RotateBitmapGraphics32(const Bitmap: TBitmap; Angle: Double): TBitmap;
+var
+  SrcBitmap : TBitmap32;
+  DstBitmap : TBitmap32;
+  Transform : TAffineTransformation;
+  y         : Integer;
+  x         : Integer;
+  DstPoint  : TPoint;
+  SrcPoint  : TPoint;
+BEGIN
+  SrcBitmap := TBitmap32.Create;
+  DstBitmap := TBitmap32.Create;
+
+  TRY
+    SrcBitmap.Assign(Bitmap);
+    DstBitmap.SetSize(SrcBitmap.Width, SrcBitmap.Height);
+    DstBitmap.Clear(clWhite32);
+    Transform := TAffineTransformation.Create;
+
+    TRY
+      Transform.Rotate(SrcBitmap.Width / 2, SrcBitmap.Height / 2, Angle);
+      FOR y := 0 TO SrcBitmap.Height - 1 DO
+      BEGIN
+        FOR x := 0 TO SrcBitmap.Width - 1 DO
+        BEGIN
+          SrcPoint := System.Types.Point(x, y);
+          DstPoint := Transform.Transform(SrcPoint);
+          IF (DstPoint.X >= 0) AND (DstPoint.X < DstBitmap.Width) AND (DstPoint.Y >= 0) AND (DstPoint.Y < DstBitmap.Height) THEN
+          BEGIN
+            DstBitmap.Pixel[DstPoint.X, DstPoint.Y] := SrcBitmap.Pixel[SrcPoint.X, SrcPoint.Y];
+          END;
+        END;
+      END;
+    FINALLY
+      Transform.Free;
+    END;
+
+    Result := TBitmap.Create;
+    Result.SetSize(DstBitmap.Width, DstBitmap.Height);
+    DstBitmap.DrawTo(Result.Canvas.Handle, 0, 0);
+  FINALLY
+    SrcBitmap.Free;
+    DstBitmap.Free;
+  END;
+END;
+
+//--- Detection du visage sur la photo -----------------------------------------
+function DetectFace(const ImagePath: string; var FaceTemplate: FSDK_FaceTemplate): Boolean;
+var
+  res          : Integer;
+  Image        : HImage;
+  FacePosition : TFacePosition;
+  LoadedImage  : TBitmap;
+  I            : Integer;
+BEGIN
+  //--- Rotation de l'image de 360 degre pour detecter le visage
+  I      := 0;
+  Result := False;
+
+  WHILE I <> 360 DO
+  BEGIN
+
+      //--- Charger l'image ----------------------------------------------------
+      LoadedImage := LoadAndConvertImage(ImagePath);
+
+      //--- Charger l'image dans le SDK ----------------------------------------
+      res := FSDK_LoadImageFromHBitmap(@Image, LoadedImage.Handle);
+      IF res <> FSDKE_OK THEN
+      BEGIN
+        ShowMessage('Échec du chargement de l''image : ' + ImagePath);
+      Exit;
+      END;
+
+      //--- Ajuster les paramètres de détection des visages --------------------
+      FSDK_SetFaceDetectionParameters(True, False, 500);
+
+      //--- Détecter le visage -------------------------------------------------
+      res := FSDK_DetectFace(Image, @FacePosition);
+      IF res = FSDKE_OK THEN
+      BEGIN
+
+      //--- Créer un modèle de visage ------------------------------------------
+       res := FSDK_GetFaceTemplateInRegion(Image, @FacePosition, @FaceTemplate);
+        IF res = FSDKE_OK THEN
+        BEGIN
+          Result := True;
+          ShowMessage('Visage détecté et modèle créé dans l''image : ' + ImagePath);
+          Break;
+        END
+        ELSE
+        BEGIN
+          ShowMessage('Échec de la création du modèle de visage dans l''image : ' + ImagePath);
+        END;
+      END;
+    I := I + 90;
+  END;
+  IF Result = False THEN ShowMessage('Aucun visage détecté dans l''image : ' + ImagePath);
+  //--- Libérer l'image --------------------------------------------------------
+  FSDK_FreeImage(Image);
+  LoadedImage.Free;
+END;
+
+// fonction de detection d'un visage
+function DetectFaceInImg(const ImagePath: string): Boolean;
+var
+  res          : Integer;
+  Image        : HImage;
+  FacePosition : TFacePosition;
+  LoadedImage  : TBitmap;
+  I            : Integer;
+  FaceTemplate : FSDK_FaceTemplate;
+BEGIN
+  //--- Rotation de l'image de 360 degre pour detecter le visage
+  I      := 0;
+  Result := False;
+
+  WHILE I <> 360 DO
+  BEGIN
+
+      //--- Charger l'image ----------------------------------------------------
+      LoadedImage := LoadAndConvertImage(ImagePath);
+
+      //--- Charger l'image dans le SDK ----------------------------------------
+      res := FSDK_LoadImageFromHBitmap(@Image, LoadedImage.Handle);
+      IF res <> FSDKE_OK THEN
+      BEGIN
+        ShowMessage('Échec du chargement de l''image : ' + ImagePath);
+      Exit;
+      END;
+
+      //--- Ajuster les paramètres de détection des visages --------------------
+      FSDK_SetFaceDetectionParameters(True, False, 500);
+
+      //--- Détecter le visage -------------------------------------------------
+      res := FSDK_DetectFace(Image, @FacePosition);
+      IF res = FSDKE_OK THEN
+      BEGIN
+
+      //--- Créer un modèle de visage ------------------------------------------
+       res := FSDK_GetFaceTemplateInRegion(Image, @FacePosition, @FaceTemplate);
+        IF res = FSDKE_OK THEN
+        BEGIN
+          Result := True;
+          ShowMessage('Visage détecté et modèle créé dans l''image : ' + ImagePath);
+          Break;
+        END
+        ELSE
+        BEGIN
+          ShowMessage('Échec de la création du modèle de visage dans l''image : ' + ImagePath);
+        END;
+      END;
+    I := I + 90;
+  END;
+  IF Result = False THEN ShowMessage('Aucun visage détecté dans l''image : ' + ImagePath);
+  //--- Libérer l'image --------------------------------------------------------
+  FSDK_FreeImage(Image);
+  LoadedImage.Free;
+END;
+
+
+
+function CompareFaces(const ImagePath1, ImagePath2: string): Double;
+var
+  FaceTemplate1 : FSDK_FaceTemplate;
+  FaceTemplate2 : FSDK_FaceTemplate;
+  Similarity    : Single;
+BEGIN
+  Result := 0.0;
+
+  //--- Activer la bibliothèque ------------------------------------------------
+  IF FSDK_ActivateLibrary('T7tt/sJValWaDkpAeeyeWfQQgptalEQEPa0tH63RF+6J6/yg6PHhp9k7CuKItDsykZz2cQOgVjmbm/Hylts/zPLjwjYbxHvyl3zqq5vWbCTEP+PA5AWztSSW6W3APzfLGayX2dJEhIvwZoWdDx/p1M5p+T/h5APu+NEq4io5dUo=') <> FSDKE_OK THEN
+  BEGIN
+    ShowMessage('Échec de l''activation.');
+    Exit;
+  END;
+
+  //--- Initialiser la bibliothèque avec le chemin des fichiers de données -----
+  IF FSDK_Initialize('') <> FSDKE_OK THEN
+  BEGIN
+    ShowMessage('Échec de l''initialisation.');
+    Exit;
+  END;
+
+  //--- Détecter les visages et créer les modèles dans les deux images ---------
+  IF NOT DetectFace(ImagePath1, FaceTemplate1) THEN
+  BEGIN
+    ShowMessage('Aucun visage détecté dans la première image.');
+    Exit;
+  END;
+
+  IF NOT DetectFace(ImagePath2, FaceTemplate2) THEN
+  BEGIN
+    ShowMessage('Aucun visage détecté dans la deuxième image.');
+    Exit;
+  END;
+
+  //--- Comparer les visages ---------------------------------------------------
+  IF FSDK_MatchFaces(@FaceTemplate1, @FaceTemplate2, @Similarity) = FSDKE_OK THEN
+  BEGIN
+    //--- Convertir en pourcentage ---------------------------------------------
+    Result := Similarity * 100;
+    ShowMessage('Comparaison réussie. Similarité : ' + FloatToStr(Ceil(Result)) + '%');
+  END
+  ELSE
+  BEGIN
+    ShowMessage('Échec de la comparaison des visages.');
+  END;
+END;
+
+// Recherche une chaine sur le texte extrait sur une image ---------------------
+function SearchStringInImg(const FileName, searchString : String) : String;
+var
+  Position  : Integer;
+BEGIN
+  Tesseract := TTesseractOCR4.Create;
+  TRY
+
+    IF Tesseract.Initialize('tessdata' + PathDelim, 'fra') THEN
+    BEGIN
+      Tesseract.SetImage(FileName);
+      Tesseract.SetVariable('tessedit_pageseg_mode', '3'); // Mode de segmentation de page
+      Tesseract.SetVariable('tessedit_ocr_engine_mode', '1'); // Moteur de reconnaissance
+      Position := Pos(LowerCase(searchString),LowerCase(Tesseract.RecognizeAsText));
+      IF Position > 0 THEN Result := '1' ELSE Result := '0';
+    END;
+  FINALLY
+    Tesseract.Free;
+  END;
+END;
+
+procedure TForm1.Button1Click(Sender: TObject);
+begin
+  CompareFaces('C:\Program Files (x86)\Luxand\FaceSDK 8.2.0\demo\IMG1.jpg', 'C:\Program Files (x86)\Luxand\FaceSDK 8.2.0\demo\IMG3.jpg');
+end;
+
+procedure TForm1.Button2Click(Sender: TObject);
+var
+  Text       : String;
+  InputFile  : String;
+  Search     : String;
+begin
+  InputFile  := 'C:\Program Files (x86)\Luxand\FaceSDK 8.2.0\demo\IMG15.jpg';
+  Search     := 'myString';
+  Text       := SearchStringInImg(InputFile,Search);
+  IF Text = '0' THEN ShowMessage('chaine non trouvée') ELSE ShowMessage('chaine trouvée');
+end;
+
+procedure TForm1.Button3Click(Sender: TObject);
+begin
+  ShowMessage(DetectFaceInImg('C:\Program Files (x86)\Luxand\FaceSDK 8.2.0\demo\IMG1.jpg').ToString());
+end;
+
+end.
